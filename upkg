@@ -43,7 +43,7 @@ if [ -t 2 ]; then
 fi
 
 if command -v apt-cyg >/dev/null 2>&1; then
-    PM="apt_cyg"
+    PM="apt-cyg"
 elif command -v apt >/dev/null 2>&1; then
     PM="apt"
 elif command -v microdnf >/dev/null 2>&1; then
@@ -91,21 +91,57 @@ checkDB() {
     [ -n "$(ls -A "$PM_DB" 2>/dev/null)" ] || CMD=update run_$PM >/dev/null
 }
 
-call_apt_cyg() {
+run_apt-cyg() {
+    [ -z "$FORCE_YES" ] || FORCE_YES="--noconfirm"
     case $CMD in
-        install)   (set -x; apt-cyg --noupdate install "$@");;
-        remove)    (set -x; apt-cyg --noupdate remove "$@");;
-        update)    (set -x; apt-cyg update);;
-        upgrade)   (set -x; apt-cyg --noupdate dist-upgrade);;
-        available)
-            [ -z "$1" ] && set -- ".*" || set -- "$(glob2re "$1")"
-            (set -x; apt-cyg --noupdate find "$@") | sed -n '/^Searching for installable packages/,$p'
+        update)
+            run $SUDO apt-cyg update;;
+        install)
+            local i=1
+            while [ $i -le $# ]; do
+                local p="${!i}"
+                if [ "${p:${#p}-7}" = ".tar.xz" ]; then
+                    echo "Error: apt-cyg can not install downloaded packages like '$p'" >&2
+                    exit 1
+                    set -- "${@:1:$((i-1))}" "${@:$((i+1))}"
+                else
+                    i=$((i+1))
+                fi
+            done
+            [ $# -eq 0 ] || run $SUDO apt-cyg install $FORCE_YES "$@"
             ;;
-        info)      (set -x; apt-cyg --noupdate describe "$@");;
-        files)     (set -x; apt-cyg --noupdate listfiles "$@");;
-        list)      (set -x; apt-cyg --noupdate show);;
-        version)   (set -x; apt-cyg --noupdate describe "$@" | grep -E '^(@|version:)');;
-        *) UNKNOWN_CMD=1;;
+        remove)
+            run $SUDO apt-cyg $FORCE_YES remove "$@";;
+        purge)
+            run $SUDO apt-cyg $FORCE_YES remove "$@";;
+        show)
+            run apt-cyg describe "$@";;
+        show-remote)
+            run apt-cyg describe "$@";;
+        files)
+            run cygcheck --list-package "$@";;
+        files-remote)
+            run apt-cyg listfiles "$@";;
+        locate)
+            run cygcheck --find-package "$@";;
+        locate-remote)
+            # this magic strips the '/' from the beggining for each argument
+            for ((i=1; i<=$#; i++)); do
+                local p="${!i}"
+                p="${p#/}"
+                set -- "${@:1:$((i-1))}" "$p" "${@:$((i+1))}"
+            done
+            run apt-cyg filesearch "$@"
+            ;;
+        list)
+            run apt-cyg --no-header show;;
+        list-all)
+            run apt-cyg find '.*' | run sed -E -e '0,/^Searching for installable packages/d' -e '/^#/d';;
+        search)
+            run apt-cyg find ".*${1}.*" | run sed -E -e '0,/^Searching for installable packages/d' -e '/^#/d';;
+        download)
+            run apt-cyg download "$@";;
+        *) UNKNOWN_CMD="$CMD";;
     esac
 }
 
