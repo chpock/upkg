@@ -1,0 +1,709 @@
+#!/bin/bash
+
+VERSION=0.0.1
+
+BANNER=$(cat <<EOF
+upkg $VERSION
+Copyright (C) 2023 Konstantin Kushnir <chpock@gmail.com>
+License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+
+Home page: https://github.com/chpock/upkg
+EOF
+)
+
+set -eo pipefail
+
+TEST_DOCKER_IMAGES=$(cat <<'EOF'
+microdnf registry.access.redhat.com/ubi9/ubi-minimal:9.2-717
+dnf      registry.access.redhat.com/ubi9/ubi:9.3-1361
+apt      ubuntu:22.04
+pacman   archlinux:base-20231112.0.191179
+zypper   opensuse/leap:15.5
+yum      centos:7.9.2009
+EOF
+)
+
+if [ "$1" = "test" ]; then
+    DOCKER_IMAGE="$(echo "$TEST_DOCKER_IMAGES" | grep "^$2 " | awk '{print $2}')"
+    if [ -z "$DOCKER_IMAGE" ]; then
+        echo "Error: don't know how to test '$2'"
+        exit 1
+    fi
+    set -x
+    exec docker run --rm -ti -w /tmp -v "${PWD}"/upkg:/tmp/upkg --entrypoint /bin/bash "$DOCKER_IMAGE" -c 'export PATH="/tmp:$PATH"; exec bash --rcfile <(/tmp/upkg completion bash show-all)'
+fi
+
+if [ -t 2 ]; then
+    CL_RESET=$'\e[0m'
+    CL_BANNER=$'\e[0;33m'; # COLOR_BROWN
+    CL_CMD=$'\e[1;36m'; # COLOR_LIGHTCYAN
+    CL_ARGS=$'\e[0;36m'; #COLOR_CYAN
+fi
+
+if command -v apt-cyg >/dev/null 2>&1; then
+    PM="apt_cyg"
+elif command -v apt >/dev/null 2>&1; then
+    PM="apt"
+elif command -v microdnf >/dev/null 2>&1; then
+    PM="microdnf"
+elif command -v dnf >/dev/null 2>&1; then
+    PM="dnf"
+elif command -v pacman >/dev/null 2>&1; then
+    PM="pacman"
+elif command -v yum >/dev/null 2>&1; then
+    PM="yum"
+elif command -v zypper >/dev/null 2>&1; then
+    PM="zypper"
+else
+    echo "Error: could not find any known package manager." >&2
+    exit 1
+fi
+
+CMDS=$(cat <<'EOF'
+update:Refresh the local package repository
+install <package>:Install package(s) by name
+upgrade <package>:Install (upgrade) packages which have an older version already installed
+remove <package>:Remove a package(s) and all dependencies by name
+purge <package>:Remove a package(s) and all dependencies and configuration files
+download <package>:Download package(s) by name
+show <package>:Show all or most information about the installed package
+show-remote <package>:Show all or most information about the package in repositories
+files <package>:List the files that the installed package holds
+files-remote <package>:List the files that the package in repositories holds
+locate <file>:Query the installed package which provides <file>
+locate-remote <file>:Query the package in repositories which provides <file>
+list:Generates a list of installed packages
+list-all:Generates a list of all available packages
+list-upgrade:Lists packages which have an update available
+search <query>:Search for package(s) by searching the expression in name, description, short description
+help:Show help
+EOF
+)
+
+run() {
+    echo "${CL_BANNER}>>> ${CL_CMD}$1${CL_ARGS}" "${@:2}" "${CL_RESET}" >&2
+    [ -n "$UPKG_DRY_RUN" ] || "$@"
+}
+
+checkDB() {
+    [ -n "$(ls -A "$PM_DB" 2>/dev/null)" ] || CMD=update run_$PM >/dev/null
+}
+
+call_apt_cyg() {
+    case $CMD in
+        install)   (set -x; apt-cyg --noupdate install "$@");;
+        remove)    (set -x; apt-cyg --noupdate remove "$@");;
+        update)    (set -x; apt-cyg update);;
+        upgrade)   (set -x; apt-cyg --noupdate dist-upgrade);;
+        available)
+            [ -z "$1" ] && set -- ".*" || set -- "$(glob2re "$1")"
+            (set -x; apt-cyg --noupdate find "$@") | sed -n '/^Searching for installable packages/,$p'
+            ;;
+        info)      (set -x; apt-cyg --noupdate describe "$@");;
+        files)     (set -x; apt-cyg --noupdate listfiles "$@");;
+        list)      (set -x; apt-cyg --noupdate show);;
+        version)   (set -x; apt-cyg --noupdate describe "$@" | grep -E '^(@|version:)');;
+        *) UNKNOWN_CMD=1;;
+    esac
+}
+
+run_pacman() {
+    PM_DB="/var/lib/pacman/sync"
+    [ -z "$FORCE_YES" ] || FORCE_YES="--noconfirm"
+    case $CMD in
+        update)
+            run $SUDO pacman --sync --refresh
+            run $SUDO pacman --files --refresh
+            ;;
+        install)
+            local i=1
+            while [ $i -le $# ]; do
+                local p="${!i}"
+                if [ "${p:${#p}-12}" = ".pkg.tar.zst" ]; then
+                    run $SUDO pacman $FORCE_YES --upgrade "$p"
+                    set -- "${@:1:$((i-1))}" "${@:$((i+1))}"
+                else
+                    i=$((i+1))
+                fi
+            done
+            [ $# -eq 0 ] || { checkDB && run $SUDO pacman $FORCE_YES --sync "$@"; }
+            ;;
+        upgrade)
+            checkDB
+            run $SUDO pacman $FORCE_YES --sync "$@"
+            ;;
+        remove)
+            run $SUDO pacman $FORCE_YES --remove --recursive "$@";;
+        purge)
+            run $SUDO pacman $FORCE_YES --remove --recursive --nosave "$@";;
+        show)
+            run pacman --query --info "$@";;
+        show-remote)
+            checkDB
+            run pacman --sync --info --info "$@"
+            ;;
+        files)
+            run pacman --query --list "$@";;
+        files-remote)
+            checkDB
+            run pacman --files --list "$@"
+            ;;
+        locate)
+            run pacman --query --owns "$@";;
+        locate-remote)
+            checkDB
+            run pacman --files "$@"
+            ;;
+        list)
+            run pacman --query;;
+        list-all)
+            checkDB
+            # convert from:
+            #
+            # core archlinux-keyring 20231113-1 [installed: 20231107-1]
+            #
+            # to:
+            #
+            # archlinux-keyring 20231113-1 [installed: 20231107-1] [core]
+            #
+            run pacman --sync --list | run sed -E -e 's/^([^[:space:]]+)[[:space:]]+(.+)$/\2 [\1]/'
+            ;;
+        list-upgrade)
+            checkDB
+            run pacman --query --upgrades
+            ;;
+        search)
+            checkDB
+            run pacman --sync --search "$@"
+            ;;
+        download)
+            checkDB
+            run pacman --noconfirm --cachedir . -Sw "$@"
+            ;;
+        *) UNKNOWN_CMD="$CMD";;
+    esac
+}
+
+run_zypper() {
+    [ -z "$FORCE_YES" ] || FORCE_YES="--non-interactive"
+    case $CMD in
+        update)
+            run $SUDO zypper refresh;;
+        install)
+            run $SUDO zypper $FORCE_YES install "$@";;
+        upgrade)
+            run $SUDO zypper $FORCE_YES update "$@";;
+        remove)
+            run $SUDO zypper $FORCE_YES remove --clean-deps "$@";;
+        purge)
+            run $SUDO zypper $FORCE_YES remove --clean-deps "$@";;
+        show)
+            run_rpm "$@";;
+        show-remote)
+            run zypper info "$@"
+            ;;
+        files)
+            run_rpm "$@";;
+        files-remote)
+            local p R
+            for p in "$@"; do
+                [ "$#" -eq 1 ] || echo "#### $p ####"
+                local T="$(run mktemp --directory)"
+                run run zypper --pkg-cache-dir "$T" download "$p" && R=0 || R=$?
+                [ $R -ne 0 ] || run rpm --query --list --package "$T"/*/*/*.rpm
+                run rm -rf "$T"
+                [ $R -eq 0 ] || return $R
+            done
+            ;;
+        locate)
+            run_rpm "$@";;
+        locate-remote)
+            run zypper search --provides "$@"
+            ;;
+        list)
+            run zypper --table-style 0 search --installed-only | \
+                run sed -E -n -e '/^[^|]+\|[[:space:]]+/p' | \
+                run tail -n +2 | \
+                run sed -E -e 's/^[^|]+\|[[:space:]]+//' -e 's/[[:space:]]+\|/ |/g'
+            ;;
+        list-all)
+            run zypper --table-style 0 search | \
+                run sed -E -n -e '/^[^|]+\|[[:space:]]+/p' | \
+                run tail -n +2 | \
+                run sed -E -e 's/^[^|]+\|[[:space:]]+//' -e 's/[[:space:]]+\|/ |/g'
+            ;;
+        list-upgrade)
+            run zypper --table-style 0 list-updates --all | \
+                run sed -E -n -e '/^[^|]+\|[[:space:]]+/p' | \
+                run tail -n +2 | \
+                run awk -vFS=' \\| ' '{print $3 " new:" $5  " current:" $4 " arch:" $6}'
+            ;;
+        search)
+            run zypper --table-style 0 search "$@" | \
+                run sed -E -n -e '/^[^|]+\|[[:space:]]+/p' | \
+                run tail -n +2 | \
+                run sed -E -e 's/^[^|]+\|[[:space:]]+//' -e 's/[[:space:]]+\|/ |/g'
+            ;;
+        download)
+            local T="$(mktemp --directory)"
+            local R
+            run zypper --pkg-cache-dir "$T" download "$@" && R=0 || R=$?
+            [ $R -ne 0 ] || run mv "$T"/*/*/*.rpm .
+            run rm -rf "$T"
+            return $R
+            ;;
+        *) UNKNOWN_CMD="$CMD";;
+    esac
+}
+
+run_yum() {
+    [ -z "$FORCE_YES" ] || FORCE_YES="--assumeyes"
+    case $CMD in
+        update)
+            run $SUDO yum makecache;;
+        install)
+            run $SUDO yum install $FORCE_YES "$@"
+            ;;
+        upgrade)
+            run $SUDO yum update $FORCE_YES "$@"
+            ;;
+        remove)
+            run $SUDO yum erase $FORCE_YES "$@";;
+        purge)
+            run $SUDO yum erase $FORCE_YES "$@";;
+        show)
+            run_rpm "$@";;
+        show-remote)
+            run yum info "$@"
+            ;;
+        files)
+            run_rpm "$@";;
+        files-remote)
+            run repoquery --list "$@"
+            ;;
+        locate)
+            run_rpm "$@";;
+        locate-remote)
+            run yum whatprovides "$@"
+            ;;
+        list)
+            run yum list --cacheonly installed;;
+        list-all)
+            local A="$(run uname --machine)"
+            run yum list all | run grep -E "^\\S+\\.(${A}|noarch)\s"
+            ;;
+        list-upgrade)
+            local A="$(run uname --machine)"
+            run yum list updates | run grep -E "^\\S+\\.(${A}|noarch)\s"
+            ;;
+        search)
+            local A="$(run uname --machine)"
+            run yum search all "$@" | run grep -E "^\\S+\\.(${A}|noarch)\s"
+            ;;
+        download)
+            local A="$(run uname --machine)"
+            run curl --fail --silent --show-error --remote-name --remote-header-name --location \
+                "$(repoquery --location "--archlist=${A},noarch" "$@")"
+            ;;
+        *) UNKNOWN_CMD="$CMD";;
+    esac
+}
+
+run_dnf() {
+    # The parameter '--disableplugin=subscription-manager' is intended to avoid an error:
+    #
+    # Updating Subscription Management repositories.
+    # Unable to read consumer identity
+    #
+    # This system is not registered with an entitlement server. You can use subscription-manager to register.
+    #
+    [ -z "$FORCE_YES" ] || FORCE_YES="--assumeyes"
+    case $CMD in
+        install)
+            local i=1
+            while [ $i -le $# ]; do
+                local p="${!i}"
+                if [ "${p:${#p}-4}" = ".rpm" ]; then
+                    run_rpm "$p"
+                    set -- "${@:1:$((i-1))}" "${@:$((i+1))}"
+                else
+                    i=$((i+1))
+                fi
+            done
+            [ $# -eq 0 ] || run $SUDO dnf --disableplugin=subscription-manager install $FORCE_YES "$@"
+            ;;
+        upgrade)
+            run $SUDO dnf --disableplugin=subscription-manager upgrade $FORCE_YES "$@";;
+        remove)
+            run $SUDO dnf --disableplugin=subscription-manager remove $FORCE_YES "$@";;
+        purge)
+            run $SUDO dnf --disableplugin=subscription-manager remove $FORCE_YES "$@";;
+        show)
+            run_rpm "$@";;
+        show-remote)
+            run dnf --disableplugin=subscription-manager repoquery --info "$@";;
+        files)
+            run_rpm "$@";;
+        files-remote)
+            run dnf --disableplugin=subscription-manager repoquery --list "$@";;
+        locate)
+            run_rpm "$@";;
+        locate-remote)
+            local A="$(run uname --machine)"
+            run dnf --disableplugin=subscription-manager repoquery --file "$@" --arch "noarch,$A"
+            ;;
+        list)
+            run dnf --disableplugin=subscription-manager repoquery --installed;;
+        list-all)
+            local A="$(run uname --machine)"
+            run dnf --disableplugin=subscription-manager repoquery --available --arch "noarch,$A"
+            ;;
+        list-upgrade)
+            run dnf --disableplugin=subscription-manager repoquery --upgrades;;
+        search)
+            local A="$(run uname --machine)"
+            run dnf --disableplugin=subscription-manager repoquery --arch "noarch,$A" "*${1}*"
+            ;;
+        download)
+            local A="$(run uname --machine)"
+            run dnf --disableplugin=subscription-manager download --arch "noarch,$A" "$@"
+            ;;
+        *) UNKNOWN_CMD="$CMD";;
+    esac
+}
+
+run_microdnf() {
+    # The parameter '--disableplugin=subscription-manager' is intended to avoid an error:
+    #     (microdnf:126): librhsm-WARNING **: 16:57:07.774: Found 0 entitlement certificates
+    # see: https://bugzilla.redhat.com/show_bug.cgi?id=1781126
+    [ -z "$FORCE_YES" ] || FORCE_YES="--assumeyes"
+    case $CMD in
+        install)
+            local i=1
+            while [ $i -le $# ]; do
+                local p="${!i}"
+                if [ "${p:${#p}-4}" = ".rpm" ]; then
+                    run_rpm "$p"
+                    set -- "${@:1:$((i-1))}" "${@:$((i+1))}"
+                else
+                    i=$((i+1))
+                fi
+            done
+            [ $# -eq 0 ] || run $SUDO microdnf --disableplugin=subscription-manager install $FORCE_YES "$@"
+            ;;
+        upgrade)
+            run $SUDO microdnf --disableplugin=subscription-manager upgrade $FORCE_YES "$@";;
+        remove)
+            run $SUDO microdnf --disableplugin=subscription-manager remove $FORCE_YES "$@";;
+        purge)
+            run $SUDO microdnf --disableplugin=subscription-manager remove $FORCE_YES "$@";;
+        show)
+            run_rpm "$@";;
+        show-remote)
+            run microdnf --disableplugin=subscription-manager repoquery --info "$@";;
+        files)
+            run_rpm "$@";;
+        files-remote)
+            local p R
+            local H="$(run pwd)"
+            local A="$(run uname --machine)"
+            for p in "$@"; do
+                [ "$#" -eq 1 ] || echo "#### $p ####"
+                local T="$(run mktemp --directory)"
+                run cd "$T"
+                run microdnf --disableplugin=subscription-manager download --archlist="noarch,$A" "$p" && R=0 || R=$?
+                [ $R -ne 0 ] || run rpm --query --list --package *.rpm
+                run cd "$H"
+                run rm -rf "$T"
+                [ $R -eq 0 ] || return $R
+            done
+            ;;
+        locate)
+            run_rpm "$@";;
+        list)
+            run microdnf --disableplugin=subscription-manager repoquery --installed;;
+        list-all)
+            local A="$(run uname --machine)"
+            run microdnf --disableplugin=subscription-manager repoquery --available | run grep --extended-regexp "(${A}|noarch)$"
+            ;;
+        list-upgrade)
+            #
+            # convert from:
+            #
+            # redhat-release-9.3-0.5.el9.x86_64                           ubi-9-baseos-rpms  45.4 kB
+            #  replacing redhat-release-9.2-0.13.el9.x86_64
+            # rpm-4.16.1.3-25.el9.x86_64                                  ubi-9-baseos-rpms 555.3 kB
+            #  replacing rpm-4.16.1.3-22.el9.x86_64
+            #
+            # to:
+            #
+            # redhat-release-9.3-0.5.el9.x86_64 [replacing redhat-release-9.2-0.13.el9.x86_64]
+            # rpm-4.16.1.3-25.el9.x86_64 [replacing rpm-4.16.1.3-22.el9.x86_64]
+            #
+            run microdnf --disableplugin=subscription-manager upgrade --assumeno | \
+            run sed -E -n -e '/^Upgrading:/,/^Transaction/p' | \
+            run sed -E -n -e '/^ [^[:space:]]/{:a;s/^[[:space:]]*//g;s/[[:space:]].*$//;N;/replacing/!ba;s/ *\n */ [/g;s/[[:space:]]*$/]/;p}';;
+        search)
+            local A="$(run uname --machine)"
+            run microdnf --disableplugin=subscription-manager repoquery "*${1}*" | run grep --extended-regexp "(${A}|noarch)$"
+            ;;
+        download)
+            local A="$(run uname --machine)"
+            run microdnf --disableplugin=subscription-manager download --archlist="noarch,$A" "$@"
+            ;;
+        *) UNKNOWN_CMD="$CMD";;
+    esac
+}
+
+run_rpm() {
+    case $CMD in
+        install)
+            run $SUDO rpm --install --force "$@";;
+        show)
+            run rpm --query --info "$@";;
+        files)
+            run rpm --query --list "$@";;
+        locate)
+            run rpm --query --file "$@";;
+    esac
+}
+
+run_apt() {
+    PM_DB="/var/lib/apt/lists"
+    [ -z "$FORCE_YES" ] || FORCE_YES='-o APT::Get::Assume-Yes=true'
+    case $CMD in
+        update)
+            run $SUDO apt update;;
+        install)
+            local i=1
+            while [ $i -le $# ]; do
+                local p="${!i}"
+                if [ "${p:${#p}-4}" = ".deb" ]; then
+                    run_dpkg "$p"
+                    set -- "${@:1:$((i-1))}" "${@:$((i+1))}"
+                else
+                    i=$((i+1))
+                fi
+            done
+            [ $# -eq 0 ] || { checkDB && run $SUDO apt $FORCE_YES install "$@"; }
+            ;;
+        upgrade)
+            checkDB
+            run $SUDO apt $FORCE_YES upgrade "$@"
+            ;;
+        remove)
+            run $SUDO apt $FORCE_YES autoremove "$@";;
+        purge)
+            run $SUDO apt $FORCE_YES autoremove --purge "$@";;
+        show)
+            run_dpkg "$@";;
+        show-remote)
+            checkDB
+            run apt show --all-versions "$@"
+            ;;
+        files)
+            run_dpkg "$@";;
+        files-remote)
+            checkDB
+            local p
+            for p in "$@"; do
+                [ "$#" -eq 1 ] || echo "#### $p ####"
+                run apt-get download --print-uris "$p" | \
+                    run awk -F\' '{print $2}' | \
+                    run xargs -I '{}' curl -sL --fail --show-error '{}' | \
+                    run dpkg-deb -c /dev/stdin | \
+                    run sed -n -E -e 's#/$##' -e 's#^.+[[:digit:]]{2} \.(/.*)#\1#p'
+            done
+            ;;
+        locate)
+            run_dpkg "$@";;
+        list)
+            run apt -o "Apt::Cmd::Disable-Script-Warning=true" --installed list | run grep -v '^Listing' | run sed -E 's#^([^[:space:]]+)/[[:alpha:],-]+#\1#'
+            ;;
+        list-all)
+            checkDB
+            run apt -o "Apt::Cmd::Disable-Script-Warning=true" list | run grep -v '^Listing' | run sed -E 's#^([^[:space:]]+)/[[:alpha:],-]+#\1#'
+            ;;
+        list-upgrade)
+            checkDB
+            run apt -o "Apt::Cmd::Disable-Script-Warning=true" --upgradable list | run grep -v '^Listing' | run sed -E 's#^([^[:space:]]+)/[[:alpha:],-]+#\1#'
+            ;;
+        search)
+            checkDB
+            run apt search "$@"
+            ;;
+        download)
+            checkDB
+            run apt download "$@"
+            ;;
+        *) UNKNOWN_CMD="$CMD";;
+    esac
+}
+
+run_dpkg() {
+    case $CMD in
+        install)
+            run $SUDO dpkg --install "$@";;
+        show)
+            run dpkg --status "$@";;
+        files)
+            run dpkg --listfiles "$@";;
+        locate)
+            run dpkg --search "$@";;
+    esac
+}
+
+__upkg_completion() {
+
+    if [ "$1" = "--install" ]; then
+        complete -F __upkg_completion upkg yupkg
+        return
+    fi
+
+    local UPKG="!UPKG!"
+    local CMDS="$(cat <<'EOF'
+!CMDS!
+EOF
+)"
+    local PURE_CMDS="$(
+        echo "test"
+        MAX_CMD_LENGTH=0
+        IFS=\$'\n'
+        for i in $CMDS; do
+            CMD="${i%%:*}"
+            [ "${#CMD}" -lt "$MAX_CMD_LENGTH" ] || MAX_CMD_LENGTH="${#CMD}"
+            CMD="${CMD%% *}"
+            echo "$CMD"
+        done
+        echo "$MAX_CMD_LENGTH"
+    )"
+    # get the last line with MAX_CMD_LENGTH
+    local MAX_CMD_LENGTH="$(echo "$PURE_CMDS" | tail -n 1)"
+    # skip MAX_CMD_LENGTH in the last line
+    PURE_CMDS="$(echo "$PURE_CMDS" | head -n -1)"
+
+    COMPREPLY=()
+
+    local CUR="${COMP_WORDS[COMP_CWORD]}"
+    local COMP_MODE="cmd"
+    local COMP_ARG_NUM=$(( COMP_CWORD - 2 ))
+    local CMD="${COMP_WORDS[1]}"
+
+    if [ ${COMP_CWORD} -eq 1 ]; then
+        PURE_CMDS="-y $PURE_CMDS"
+    elif [ ${COMP_CWORD} -ne 2 ] || [ "$CMD" != "-y" ]; then
+        COMP_MODE="args"
+        if [ "$CMD" = "-y" ]; then
+            CMD="${COMP_WORDS[2]}"
+            COMP_ARG_NUM=$(( COMP_CWORD - 3 ))
+        fi
+    fi
+
+    if [ "$COMP_MODE" = "cmd" ]; then
+        if [ -z "$CUR" ] && bind -V | grep '^show-all-if-ambiguous' | grep --silent --fixed-string "on'"; then
+            echo -n "$(
+                IFS=\$'\n'
+                for i in $CMDS; do
+                    CMD="${i%%:*}"
+                    DESC="${i#*:}"
+                    printf "%-${MAX_CMD_LENGTH}s %s\n" "$CMD" "$DESC"
+                done
+            )"
+            COMPREPLY=('~=~=~=~=~=~' '=~=~=~=~=~=')
+        else
+            COMPREPLY=($(compgen -W "$PURE_CMDS" -- "${CUR}"))
+        fi
+        return 0
+    fi
+
+    if [ "$CMD" = "install" ]; then
+        COMPREPLY=($(compgen -W "$($UPKG list-all 2>/dev/null | awk '{print $1}')" -- "${CUR}"))
+        # allow to install from package file
+        compopt -o default
+    elif [ "$CMD" = "download" ] || [ "$CMD" = "show-remote" ] || [ "$CMD" = "files-remote" ]; then
+        COMPREPLY=($(compgen -W "$($UPKG list-all 2>/dev/null | awk '{print $1}')" -- "${CUR}"))
+    elif [ "$CMD" = "upgrade" ]; then
+        COMPREPLY=($(compgen -W "$($UPKG list-upgrade 2>/dev/null | awk '{print $1}')" -- "${CUR}"))
+    elif [ "$CMD" = "remove" ] || [ "$CMD" = "purge" ] || [ "$CMD" = "show" ] || [ "$CMD" = "files" ]; then
+        COMPREPLY=($(compgen -W "$($UPKG list 2>/dev/null | awk '{print $1}')" -- "${CUR}"))
+    elif [ "$CMD" = "locate" ] || [ "$CMD" = "locate-remote" ]; then
+        compopt -o default
+    elif [ "$CMD" = "test" ] && [ $COMP_ARG_NUM -eq 0 ]; then
+        COMPREPLY=($(compgen -W "!TEST_TARGETS!" -- "${CUR}"))
+    fi
+
+    return 0
+
+}
+
+completion() {
+    local SELF="${BASH_SOURCE:-$0}"
+    SELF="$(cd "$(dirname "$SELF")"; pwd)/$(basename "$SELF")"
+    if [ "$1" != "bash" ]; then
+        echo "Error: unknown completion type '$1'. Only completion type 'bash' is supported." >&2
+        exit 1
+    fi
+    type __upkg_completion | tail -n+2 | sed -E \
+        -e "s/\\\\(\\$'\\\\n')/\\1/" \
+        -e "s&!UPKG!&$SELF&" \
+        -e "s&!CMDS!&$(echo "$CMDS" | awk 'NR==1{printf $0}{printf "\\n" $0}')&" \
+        -e "s&!TEST_TARGETS!&$(echo "$TEST_DOCKER_IMAGES" | awk '{printf $1 " "}')&"
+    echo "__upkg_completion --install"
+    [ "$2" != "show-all" ] || echo 'bind "set show-all-if-ambiguous on"'
+    exit 0
+}
+
+# filter cmds in subshell
+CMDS="$(
+    IFS=$'\n'
+    for i in $CMDS; do
+        CMD="${i%%:*}"
+        if [ "$CMD" != "help" ]; then
+            CMD="${CMD%% *}"
+            UPKG_DRY_RUN=1 run_$PM 2>/dev/null
+        fi
+        [ -n "$UNKNOWN_CMD" ] || echo "$i"
+        unset UNKNOWN_CMD
+    done
+)"
+
+CMD="$1"
+
+if [ "$CMD" = "-y" ]; then
+    FORCE_YES=1
+    shift
+    CMD="$1"
+fi
+
+if [ -z "$CMD" ] || [ "$CMD" = "help" ] || [ "$CMD" = "--help" ] || [ "$CMD" = "-h" ] || [ "$CMD" = "-help" ]; then
+    echo "Usage: $0 <command> [<arguments>]"
+    echo
+    echo "Commands:"
+    echo
+    echo "$CMDS" | sed -E 's/^([^:]+):(.+)$/    \1\n        \2\n/'
+    echo "Other commands:"
+    echo
+    echo "    completion bash"
+    echo "        Generate bash completion script"
+    exit 0
+elif [ "$CMD" = "version" ] || [ "$CMD" = "--version" ] || [ "$CMD" = "-v" ] || [ "$CMD" = "-version" ]; then
+    echo "$BANNER"
+    exit 0
+fi
+
+shift
+
+[ "$CMD" != "completion" ] || completion "$@"
+
+if [ "$(id -u)" -eq 0 ] || ! SUDO="$(which sudo 2>/dev/null)"; then
+    SUDO=""
+fi
+
+run_$PM "$@"
+
+if [ -n "$UNKNOWN_CMD" ]; then
+    echo "Error: the command '$UNKNOWN_CMD' is not supported for the package manager '$PM'" >&2
+    exit 1
+fi
