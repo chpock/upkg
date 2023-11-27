@@ -664,7 +664,7 @@ EOF
                 for i in $CMDS; do
                     CMD="${i%%:*}"
                     DESC="${i#*:}"
-                    printf "%-${MAX_CMD_LENGTH}s %s\n" "$CMD" "$DESC"
+                    printf "\n%-${MAX_CMD_LENGTH}s %s" "$CMD" "$DESC"
                 done
             )"
             COMPREPLY=('~=~=~=~=~=~' '=~=~=~=~=~=')
@@ -702,7 +702,7 @@ generate() {
             sed -E \
                 -e "s/\\\\(\\$'\\\\n')/\\1/" \
                 -e "s&!UPKG!&$SELF&" \
-                -e "s&!CMDS!&$(echo "$CMDS" | awk 'NR==1{printf $0}{printf "\\n" $0}')&" \
+                -e "s&!CMDS!&$(echo "$CMDS" | awk 'NR==1{printf $0}NR!=1{printf "\\n" $0}')&" \
                 -e "s&!TEST_TARGETS!&$(echo "$TEST_DOCKER_IMAGES" | awk '{printf $1 " "}')&"
         echo "__upkg_completion --install"
         [ "$2" != "show-all" ] || echo 'bind "set show-all-if-ambiguous on"'
