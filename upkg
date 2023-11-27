@@ -145,6 +145,7 @@ run_apt-cyg() {
         locate)
             run cygcheck --find-package "$@";;
         locate-remote)
+            local i
             # this magic strips the '/' from the beggining for each argument
             for ((i=1; i<=$#; i++)); do
                 local p="${!i}"
@@ -719,13 +720,13 @@ generate() {
 # filter cmds in subshell
 CMDS="$(
     IFS=$'\n'
-    for i in $CMDS; do
-        CMD="${i%%:*}"
+    for CMD_LINE in $CMDS; do
+        CMD="${CMD_LINE%%:*}"
         if [ "$CMD" != "help" ]; then
             CMD="${CMD%% *}"
             UPKG_DRY_RUN=1 run_$PM 2>/dev/null
         fi
-        [ -n "$UNKNOWN_CMD" ] || echo "$i"
+        [ -n "$UNKNOWN_CMD" ] || echo "$CMD_LINE"
         unset UNKNOWN_CMD
     done
 )"
