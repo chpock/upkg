@@ -49,19 +49,25 @@ if [ "$CMD" = "test" ]; then
     exec docker run --rm -ti -w /tmp -v "${PWD}"/upkg:/tmp/upkg --entrypoint /bin/bash "$DOCKER_IMAGE" -c 'export PATH="/tmp:$PATH"; exec bash --rcfile <(/tmp/upkg generate bash-completion show-all)'
 fi
 
-if command -v apt-cyg >/dev/null 2>&1; then
+_has() {
+    command -v "$1" >/dev/null 2>&1 && return 0 || return 1
+}
+
+if _has apt-cyg; then
     PM="apt-cyg"
-elif command -v apt >/dev/null 2>&1; then
+elif _has apt && _has dpkg; then
+    # double check for apt because MacOS has:
+    # /usr/bin/apt - apt - annotation processing tool
     PM="apt"
-elif command -v microdnf >/dev/null 2>&1; then
+elif _has microdnf; then
     PM="microdnf"
-elif command -v dnf >/dev/null 2>&1; then
+elif _has dnf; then
     PM="dnf"
-elif command -v pacman >/dev/null 2>&1; then
+elif _has pacman; then
     PM="pacman"
-elif command -v yum >/dev/null 2>&1; then
+elif _has yum; then
     PM="yum"
-elif command -v zypper >/dev/null 2>&1; then
+elif _has zypper; then
     PM="zypper"
 fi
 
