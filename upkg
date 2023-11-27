@@ -32,7 +32,7 @@ if [ "$1" = "test" ]; then
         exit 1
     fi
     set -x
-    exec docker run --rm -ti -w /tmp -v "${PWD}"/upkg:/tmp/upkg --entrypoint /bin/bash "$DOCKER_IMAGE" -c 'export PATH="/tmp:$PATH"; exec bash --rcfile <(/tmp/upkg completion bash show-all)'
+    exec docker run --rm -ti -w /tmp -v "${PWD}"/upkg:/tmp/upkg --entrypoint /bin/bash "$DOCKER_IMAGE" -c 'export PATH="/tmp:$PATH"; exec bash --rcfile <(/tmp/upkg generate bash-completion show-all)'
 fi
 
 if [ -t 2 ]; then
@@ -594,7 +594,7 @@ run_dpkg() {
 __upkg_completion() {
 
     if [ "$1" = "--install" ]; then
-        complete -F __upkg_completion upkg yupkg
+        complete -F __upkg_completion upkg
         return
     fi
 
@@ -674,20 +674,25 @@ EOF
 
 }
 
-completion() {
+generate() {
     local SELF="${BASH_SOURCE:-$0}"
     SELF="$(cd "$(dirname "$SELF")"; pwd)/$(basename "$SELF")"
-    if [ "$1" != "bash" ]; then
-        echo "Error: unknown completion type '$1'. Only completion type 'bash' is supported." >&2
+    if [ "$1" = "bash-completion" ]; then
+        type __upkg_completion | tail -n+2 | \
+            sed -E \
+                -e "s/\\\\(\\$'\\\\n')/\\1/" \
+                -e "s&!UPKG!&$SELF&" \
+                -e "s&!CMDS!&$(echo "$CMDS" | awk 'NR==1{printf $0}{printf "\\n" $0}')&" \
+                -e "s&!TEST_TARGETS!&$(echo "$TEST_DOCKER_IMAGES" | awk '{printf $1 " "}')&"
+        echo "__upkg_completion --install"
+        [ "$2" != "show-all" ] || echo 'bind "set show-all-if-ambiguous on"'
+    elif [ "$1" = "bash-rc" ]; then
+        echo "# Install the completion script only if it is not already installed"
+        echo "type -t __upkg_completion >/dev/null 2>&1 || source <(\"$SELF\" generate bash-completion)"
+    else
+        echo "Error: unknown target to generate '$1'." >&2
         exit 1
     fi
-    type __upkg_completion | tail -n+2 | sed -E \
-        -e "s/\\\\(\\$'\\\\n')/\\1/" \
-        -e "s&!UPKG!&$SELF&" \
-        -e "s&!CMDS!&$(echo "$CMDS" | awk 'NR==1{printf $0}{printf "\\n" $0}')&" \
-        -e "s&!TEST_TARGETS!&$(echo "$TEST_DOCKER_IMAGES" | awk '{printf $1 " "}')&"
-    echo "__upkg_completion --install"
-    [ "$2" != "show-all" ] || echo 'bind "set show-all-if-ambiguous on"'
     exit 0
 }
 
@@ -721,8 +726,11 @@ if [ -z "$CMD" ] || [ "$CMD" = "help" ] || [ "$CMD" = "--help" ] || [ "$CMD" = "
     echo "$CMDS" | sed -E 's/^([^:]+):(.+)$/    \1\n        \2\n/'
     echo "Other commands:"
     echo
-    echo "    completion bash"
+    echo "    generate bash-completion"
     echo "        Generate bash completion script"
+    echo
+    echo "    generate bash-rc"
+    echo "        Generate bash startup script"
     exit 0
 elif [ "$CMD" = "version" ] || [ "$CMD" = "--version" ] || [ "$CMD" = "-v" ] || [ "$CMD" = "-version" ]; then
     echo "$BANNER"
@@ -731,7 +739,7 @@ fi
 
 shift
 
-[ "$CMD" != "completion" ] || completion "$@"
+[ "$CMD" != "generate" ] || generate "$@"
 
 if [ "$(id -u)" -eq 0 ] || ! SUDO="$(which sudo 2>/dev/null)"; then
     SUDO=""
