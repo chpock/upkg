@@ -15,6 +15,20 @@ EOF
 
 set -eo pipefail
 
+CMD="$1"
+
+if [ -t 2 ]; then
+    CL_RESET=$'\e[0m'
+    CL_BANNER=$'\e[0;33m'; # COLOR_BROWN
+    CL_CMD=$'\e[1;36m'; # COLOR_LIGHTCYAN
+    CL_ARGS=$'\e[0;36m'; #COLOR_CYAN
+fi
+
+if [ "$CMD" = "version" ] || [ "$CMD" = "--version" ] || [ "$CMD" = "-v" ] || [ "$CMD" = "-version" ]; then
+    echo "$BANNER"
+    exit 0
+fi
+
 TEST_DOCKER_IMAGES=$(cat <<'EOF'
 microdnf registry.access.redhat.com/ubi9/ubi-minimal:9.2-717
 dnf      registry.access.redhat.com/ubi9/ubi:9.3-1361
@@ -25,7 +39,7 @@ yum      centos:7.9.2009
 EOF
 )
 
-if [ "$1" = "test" ]; then
+if [ "$CMD" = "test" ]; then
     DOCKER_IMAGE="$(echo "$TEST_DOCKER_IMAGES" | grep "^$2 " | awk '{print $2}')"
     if [ -z "$DOCKER_IMAGE" ]; then
         echo "Error: don't know how to test '$2'"
@@ -33,13 +47,6 @@ if [ "$1" = "test" ]; then
     fi
     set -x
     exec docker run --rm -ti -w /tmp -v "${PWD}"/upkg:/tmp/upkg --entrypoint /bin/bash "$DOCKER_IMAGE" -c 'export PATH="/tmp:$PATH"; exec bash --rcfile <(/tmp/upkg generate bash-completion show-all)'
-fi
-
-if [ -t 2 ]; then
-    CL_RESET=$'\e[0m'
-    CL_BANNER=$'\e[0;33m'; # COLOR_BROWN
-    CL_CMD=$'\e[1;36m'; # COLOR_LIGHTCYAN
-    CL_ARGS=$'\e[0;36m'; #COLOR_CYAN
 fi
 
 if command -v apt-cyg >/dev/null 2>&1; then
@@ -56,9 +63,16 @@ elif command -v yum >/dev/null 2>&1; then
     PM="yum"
 elif command -v zypper >/dev/null 2>&1; then
     PM="zypper"
-else
-    echo "Error: could not find any known package manager." >&2
-    exit 1
+fi
+
+if [ "$CMD" = "supported" ] || [ -z "$PM" ]; then
+    if [ -n "$PM" ]; then
+        [ "$2" = "silent" ] || echo "$PM"
+        exit 0
+    else
+        [ "$2" = "silent" ] || echo "Error: could not find any known package manager."
+        exit 1
+    fi
 fi
 
 CMDS=$(cat <<'EOF'
@@ -710,8 +724,6 @@ CMDS="$(
     done
 )"
 
-CMD="$1"
-
 if [ "$CMD" = "-y" ]; then
     FORCE_YES=1
     shift
@@ -731,9 +743,6 @@ if [ -z "$CMD" ] || [ "$CMD" = "help" ] || [ "$CMD" = "--help" ] || [ "$CMD" = "
     echo
     echo "    generate bash-rc"
     echo "        Generate bash startup script"
-    exit 0
-elif [ "$CMD" = "version" ] || [ "$CMD" = "--version" ] || [ "$CMD" = "-v" ] || [ "$CMD" = "-version" ]; then
-    echo "$BANNER"
     exit 0
 fi
 
