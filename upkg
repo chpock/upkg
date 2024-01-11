@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 VERSION=0.0.1
 
@@ -627,7 +627,7 @@ EOF
     local PURE_CMDS="$(
         echo "test"
         MAX_CMD_LENGTH=0
-        IFS=\$'\n'
+        IFS=$'\n'
         for i in $CMDS; do
             CMD="${i%%:*}"
             [ "${#CMD}" -lt "$MAX_CMD_LENGTH" ] || MAX_CMD_LENGTH="${#CMD}"
@@ -661,7 +661,7 @@ EOF
     if [ "$COMP_MODE" = "cmd" ]; then
         if [ -z "$CUR" ] && bind -V | grep '^show-all-if-ambiguous' | grep --silent --fixed-string "on'"; then
             echo -n "$(
-                IFS=\$'\n'
+                IFS=$'\n'
                 for i in $CMDS; do
                     CMD="${i%%:*}"
                     DESC="${i#*:}"
@@ -701,7 +701,6 @@ generate() {
     if [ "$1" = "bash-completion" ]; then
         type __upkg_completion | tail -n+2 | \
             sed -E \
-                -e "s/\\\\(\\$'\\\\n')/\\1/" \
                 -e "s&!UPKG!&$SELF&" \
                 -e "s&!CMDS!&$(echo "$CMDS" | awk 'NR==1{printf $0}NR!=1{printf "\\n" $0}')&" \
                 -e "s&!TEST_TARGETS!&$(echo "$TEST_DOCKER_IMAGES" | awk '{printf $1 " "}')&"
