@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-VERSION=0.0.1
+VERSION=0.0.2
 
 BANNER=$(cat <<EOF
 upkg $VERSION
@@ -36,17 +36,24 @@ apt      ubuntu:22.04
 pacman   archlinux:base-20231112.0.191179
 zypper   opensuse/leap:15.5
 yum      centos:7.9.2009
+apk      alpine:3.19.0 apk add bash
 EOF
 )
 
 if [ "$CMD" = "test" ]; then
     DOCKER_IMAGE="$(echo "$TEST_DOCKER_IMAGES" | grep "^$2 " | awk '{print $2}')"
+    SHELL_CMD="$(echo "$TEST_DOCKER_IMAGES" | grep "^$2 " | sed 's/[[:space:]]\+/ /' | cut -d" " -f3-)"
     if [ -z "$DOCKER_IMAGE" ]; then
         echo "Error: don't know how to test '$2'"
         exit 1
     fi
-    set -x
-    exec docker run --rm -ti -w /tmp -v "${PWD}"/upkg:/tmp/upkg --entrypoint /bin/bash "$DOCKER_IMAGE" -c 'export PATH="/tmp:$PATH"; exec bash --rcfile <(/tmp/upkg generate bash-completion show-all)'
+    if [ "$SHELL_CMD" = "/bin/bash" ]; then
+        set -x
+        exec docker run --rm -ti -w /tmp -v "${PWD}"/upkg:/tmp/upkg --entrypoint "$USE_SHELL" "$DOCKER_IMAGE" -c 'export PATH="/tmp:$PATH"; exec bash --rcfile <(/tmp/upkg generate bash-completion show-all)'
+    else
+        set -x
+        exec docker run --rm -ti -w /tmp -v "${PWD}"/upkg:/tmp/upkg --entrypoint /bin/sh "$DOCKER_IMAGE" -c "export PATH=\"/tmp:\$PATH\";$SHELL_CMD; exec bash -c 'exec bash --rcfile <(/tmp/upkg generate bash-completion show-all)'"
+    fi
 fi
 
 _has() {
@@ -69,6 +76,8 @@ elif _has yum; then
     PM="yum"
 elif _has zypper; then
     PM="zypper"
+elif _has apk; then
+    PM="apk"
 fi
 
 if [ "$CMD" = "supported" ] || [ -z "$PM" ]; then
@@ -513,6 +522,49 @@ run_microdnf() {
         *) UNKNOWN_CMD="$CMD";;
     esac
 }
+
+run_apk() {
+    # this command:
+    #     sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/'
+    # separates package name and version number by space. I.e.
+    # from: zlib-1.3-r2
+    # to: zlib 1.3-r2
+    case $CMD in
+        update)
+            run $SUDO apk update;;
+        install)
+            run $SUDO apk add "$@";;
+        upgrade)
+            run $SUDO apk upgrade "$@"
+            ;;
+        remove)
+            run $SUDO apk del "$@";;
+        purge)
+            run $SUDO apk del --purge "$@";;
+        show)
+            run apk info --all "$@";;
+        show-remote)
+            run apk info --all "$@";;
+        files)
+            run apk info --contents "$@";;
+        files-remote)
+            run apk info --contents "$@";;
+        locate)
+            run apk info --who-owns "$@";;
+        list)
+            run apk list --installed | sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/';;
+        list-all)
+            run apk list | sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/';;
+        list-upgrade)
+            run apk list --upgradable | sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/';;
+        search)
+            run apk search "$@";;
+        download)
+            run apk fetch "$@";;
+        *) UNKNOWN_CMD="$CMD";;
+    esac
+}
+
 
 run_rpm() {
     case $CMD in
