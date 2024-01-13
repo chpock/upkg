@@ -492,7 +492,7 @@ run_microdnf() {
             run microdnf --disableplugin=subscription-manager repoquery --installed;;
         list-all)
             local A="$(run uname --machine)"
-            run microdnf --disableplugin=subscription-manager repoquery --available | run grep --extended-regexp "(${A}|noarch)$"
+            run microdnf --disableplugin=subscription-manager repoquery --available | run grep -E "(${A}|noarch)$"
             ;;
         list-upgrade)
             #
@@ -513,7 +513,7 @@ run_microdnf() {
             run sed -E -n -e '/^ [^[:space:]]/{:a;s/^[[:space:]]*//g;s/[[:space:]].*$//;N;/replacing/!ba;s/ *\n */ [/g;s/[[:space:]]*$/]/;p}';;
         search)
             local A="$(run uname --machine)"
-            run microdnf --disableplugin=subscription-manager repoquery "*${1}*" | run grep --extended-regexp "(${A}|noarch)$"
+            run microdnf --disableplugin=subscription-manager repoquery "*${1}*" | run grep -E "(${A}|noarch)$"
             ;;
         download)
             local A="$(run uname --machine)"
@@ -711,7 +711,7 @@ EOF
     fi
 
     if [ "$COMP_MODE" = "cmd" ]; then
-        if [ -z "$CUR" ] && bind -V | grep '^show-all-if-ambiguous' | grep --silent --fixed-string "on'"; then
+        if [ -z "$CUR" ] && bind -V | grep '^show-all-if-ambiguous' | grep -q -F "on'"; then
             echo -n "$(
                 IFS=$'\n'
                 for i in $CMDS; do
