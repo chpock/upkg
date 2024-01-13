@@ -124,7 +124,7 @@ run_apt-cyg() {
     [ -z "$FORCE_YES" ] || FORCE_YES="--noconfirm"
     case $CMD in
         update)
-            run $SUDO VERBOSE=1 apt-cyg update;;
+            VERBOSE=1 run $SUDO apt-cyg update;;
         install)
             local i=1
             while [ $i -le $# ]; do
@@ -137,20 +137,20 @@ run_apt-cyg() {
                     i=$((i+1))
                 fi
             done
-            [ $# -eq 0 ] || run $SUDO VERBOSE=1 apt-cyg install $FORCE_YES "$@"
+            [ $# -eq 0 ] || VERBOSE=1 run $SUDO apt-cyg install $FORCE_YES "$@"
             ;;
         remove)
-            run $SUDO VERBOSE=1 apt-cyg $FORCE_YES remove "$@";;
+            VERBOSE=1 run $SUDO apt-cyg $FORCE_YES remove "$@";;
         purge)
-            run $SUDO VERBOSE=1 apt-cyg $FORCE_YES remove "$@";;
+            VERBOSE=1 run $SUDO apt-cyg $FORCE_YES remove "$@";;
         show)
-            run VERBOSE=1 apt-cyg describe "$@";;
+            VERBOSE=1 run apt-cyg describe "$@";;
         show-remote)
-            run VERBOSE=1 apt-cyg describe "$@";;
+            VERBOSE=1 run apt-cyg describe "$@";;
         files)
             run cygcheck --list-package "$@";;
         files-remote)
-            run VERBOSE=1 apt-cyg listfiles "$@";;
+            VERBOSE=1 run apt-cyg listfiles "$@";;
         locate)
             run cygcheck --find-package "$@";;
         locate-remote)
@@ -161,16 +161,16 @@ run_apt-cyg() {
                 p="${p#/}"
                 set -- "${@:1:$((i-1))}" "$p" "${@:$((i+1))}"
             done
-            run VERBOSE=1 apt-cyg filesearch "$@"
+            VERBOSE=1 run apt-cyg filesearch "$@"
             ;;
         list)
-            run VERBOSE=1 apt-cyg --no-header show;;
+            VERBOSE=1 run apt-cyg --no-header show;;
         list-all)
-            run VERBOSE=1 apt-cyg find '.*' | run sed -E -e '0,/^Searching for installable packages/d' -e '/^#/d';;
+            VERBOSE=1 run apt-cyg find '.*' | run sed -E -e '0,/^Searching for installable packages/d' -e '/^#/d';;
         search)
-            run VERBOSE=1 apt-cyg find ".*${1}.*" | run sed -E -e '0,/^Searching for installable packages/d' -e '/^#/d';;
+            VERBOSE=1 run apt-cyg find ".*${1}.*" | run sed -E -e '0,/^Searching for installable packages/d' -e '/^#/d';;
         download)
-            run VERBOSE=1 apt-cyg download "$@";;
+            VERBOSE=1 run apt-cyg download "$@";;
         *) UNKNOWN_CMD="$CMD";;
     esac
 }
