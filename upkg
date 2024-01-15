@@ -552,11 +552,11 @@ run_apk() {
         locate)
             run apk info --who-owns "$@";;
         list)
-            run apk list --installed | sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/';;
+            run apk list --installed | run sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/';;
         list-all)
-            run apk list | sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/';;
+            run apk list | run sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/';;
         list-upgrade)
-            run apk list --upgradable | sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/';;
+            run apk list --upgradable | run sed -E 's/^([^[:space:]]+)-([^-]+-r[[:digit:]]+[[:space:]])/\1 \2/';;
         search)
             run apk search "$@";;
         download)
